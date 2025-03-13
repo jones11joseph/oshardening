@@ -1,5 +1,29 @@
 #!/bin/bash
 
+# Copyrighted to Jones Joseph
+#
+# List of operations performed by this script:
+# 1. Updates the system packages to the latest versions.
+# 2. Installs recommended security packages such as fail2ban, ufw, auditd, lynis, chkrootkit, apparmor, etc.
+# 3. Configures UFW firewall: denies incoming and allows outgoing connections.
+# 4. Disables unused services like telnet, ftp, nfs, rpcbind, etc.
+# 5. Disables root login via SSH and allows only specific users to login.
+# 6. Sets up strong SSH security configurations (disables password authentication, sets max authentication retries).
+# 7. Configures sysctl parameters for kernel hardening (IP forwarding, source routing, SYN flood protection, etc.).
+# 8. Sets proper file permissions for sensitive files like /etc/shadow, /etc/passwd, /etc/sudoers, etc.
+# 9. Enables and starts AppArmor for process isolation.
+# 10. Disables IPv6 if it's not needed.
+# 11. Removes unnecessary packages and cleans up the package manager cache.
+# 12. Configures automatic security updates.
+# 13. Sets up Fail2Ban for SSH, HTTP, and MySQL protection.
+# 14. Runs a Lynis security audit.
+# 15. Runs rootkit detection checks using rkhunter and chkrootkit.
+# 16. Checks and optionally enables SSL for Apache and Nginx web servers.
+# 17. Checks and optionally enables Gzip compression for Apache and Nginx web servers.
+# 18. Asks user whether to open essential ports (SSH, HTTP, HTTPS, MySQL, PostgreSQL).
+# 19. Flags the server as hardened by creating a `.hardening_done` file.
+# 20. Optionally reboots the server (commented out in the script).
+
 # Define variables
 LOG_FILE="/var/log/advanced_hardening.log"
 DATE=$(date +"%Y-%m-%d %H:%M:%S")
@@ -49,11 +73,24 @@ systemctl disable nfs
 systemctl disable rpcbind
 echo "Unused services disabled." >> $LOG_FILE
 
-# Disable root login over SSH
-echo "Disabling root login via SSH..." >> $LOG_FILE
-sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
-systemctl restart sshd
-echo "Root login disabled." >> $LOG_FILE
+# Check if root login is enabled on SSH and ask user to disable it
+echo "Checking root login status on SSH..." >> $LOG_FILE
+ROOT_LOGIN_STATUS=$(grep -i "PermitRootLogin" /etc/ssh/sshd_config)
+
+if [[ "$ROOT_LOGIN_STATUS" == *"yes"* ]]; then
+    echo "Root login is currently enabled on SSH." >> $LOG_FILE
+    echo "Root login is enabled. Would you like to disable it? (y/n)"
+    read DISABLE_ROOT_LOGIN
+    if [ "$DISABLE_ROOT_LOGIN" == "y" ]; then
+        sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+        systemctl restart sshd
+        echo "Root login has been disabled on SSH." >> $LOG_FILE
+    else
+        echo "Root login will not be disabled." >> $LOG_FILE
+    fi
+else
+    echo "Root login is already disabled on SSH." >> $LOG_FILE
+fi
 
 # Allow only specific users to SSH
 echo "Allowing only specific users to SSH..." >> $LOG_FILE
@@ -66,7 +103,7 @@ echo "Configuring SSH security..." >> $LOG_FILE
 sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/^#PermitEmptyPasswords no/PermitEmptyPasswords no/' /etc/ssh/sshd_config
 sed -i 's/^#UseDNS yes/UseDNS no/' /etc/ssh/sshd_config
-sed -i 's/^#MaxAuthTries 6/MaxAuthTries $MAX_AUTH_TRIES/' /etc/ssh/sshd_config
+sed -i "s/^#MaxAuthTries 6/MaxAuthTries $MAX_AUTH_TRIES/" /etc/ssh/sshd_config
 systemctl restart sshd
 echo "SSH security configuration complete." >> $LOG_FILE
 
@@ -224,14 +261,29 @@ fi
 
 # FINAL STEP: Ask user for confirmation to open ports
 echo "Would you like to open the following ports? (y/n)"
-echo "1. HTTP (Port 80)"
-echo "2. HTTPS (Port 443)"
-echo "3. MySQL (Port 3306)"
-echo "4. PostgreSQL (Port 5432)"
+echo "1. SSH (Port 22)"
+echo "2. HTTP (Port 80)"
+echo "3. HTTPS (Port 443)"
+echo "4. MySQL (Port 3306)"
+echo "5. PostgreSQL (Port 5432)"
 read OPEN_PORTS
 
 if [ "$OPEN_PORTS" == "y" ]; then
-    # Open required ports if the user confirms
+    # Check if SSH port (22) is already open, if not, prompt user to open it
+    SSH_PORT_OPEN=$(ufw status | grep -w "22/tcp" | wc -l)
+
+    if [ "$SSH_PORT_OPEN" -eq 0 ]; then
+        echo "SSH (Port 22) is not open. Would you like to open it? (y/n)"
+        read OPEN_SSH
+        if [ "$OPEN_SSH" == "y" ]; then
+            ufw allow 22/tcp
+            echo "SSH (Port 22) has been opened." >> $LOG_FILE
+        else
+            echo "SSH (Port 22) will not be opened." >> $LOG_FILE
+        fi
+    fi
+
+    # Open the other required ports if the user confirms
     ufw allow 80/tcp
     ufw allow 443/tcp
     ufw allow 3306/tcp
@@ -241,7 +293,7 @@ else
     echo "Ports have not been opened." >> $LOG_FILE
 fi
 
-# Final step: Flag the server as hardened
+# FINAL STEP: Flag the server as hardened
 touch $HARDENING_DONE_FILE
 echo "Hardening completed at $DATE" >> $LOG_FILE
 
