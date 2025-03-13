@@ -1,0 +1,294 @@
+#!/bin/bash
+
+# Copyrighted to Jones Joseph 
+# Jones Joseph (BSCR-WAF-00)
+# This script is designed to detect WAF attacks, enable email notifications, configure IP blocking through ufw or fail2ban, and provide system information logs.
+# It will perform the following:
+# 1. Detect suspicious activity patterns in Apache and Nginx access/error logs.
+# 2. Allow the user to configure email notifications for suspicious activity.
+# 3. Ask the user to enable automated IP blocking through fail2ban or ufw.
+# 4. Check and log Linux distribution and kernel version.
+# 5. Install fail2ban and ufw if not already installed.
+# 6. Enable IP blocking using fail2ban or ufw based on user input.
+# 7. Log suspicious activity and system information to appropriate files.
+
+# Define log file paths for Apache and Nginx
+APACHE_ACCESS_LOG="/var/log/apache2/access.log"
+APACHE_ERROR_LOG="/var/log/apache2/error.log"
+NGINX_ACCESS_LOG="/var/log/nginx/access.log"
+NGINX_ERROR_LOG="/var/log/nginx/error.log"
+
+# Define the suspicious activity log file
+SUSPICIOUS_LOG="/var/log/suspicious_activity.log"
+SYSTEM_INFO_LOG="/var/log/system_info.log"
+DATE_FORMAT="%Y-%m-%d %H:%M:%S"
+
+# Create the suspicious activity log file if it does not exist
+if [ ! -f "$SUSPICIOUS_LOG" ]; then
+    touch "$SUSPICIOUS_LOG"
+    chmod 600 "$SUSPICIOUS_LOG"
+fi
+
+# Create the system info log file if it does not exist
+if [ ! -f "$SYSTEM_INFO_LOG" ]; then
+    touch "$SYSTEM_INFO_LOG"
+    chmod 600 "$SYSTEM_INFO_LOG"
+fi
+
+# Define default suspicious patterns (can be customized by user in a config file)
+SUSPICIOUS_PATTERNS=(
+    "select.*from"
+    "union.*select"
+    "insert.*into"
+    "drop.*table"
+    "update.*set"
+    "declare.*@*"
+    "eval.*base64"
+    "document.cookie"
+    "alert("
+    "xp_cmdshell"
+    "cmd.exe"
+    "wget"
+    "curl"
+    "ftp"
+    "http://"
+    "file://"
+    "union.*all"
+    "input.*file"
+    "shell_exec"
+    "base64_decode"
+    "javascript:alert"
+    "etc/passwd"
+    "php://input"
+    "php://filter"
+    "system.*("
+    "exec.*("
+)
+
+# Function to log suspicious activity
+log_activity() {
+    local log_file="$1"
+    local pattern="$2"
+    local match="$3"
+    local ip_address="$4"
+    local timestamp=$(date "+$DATE_FORMAT")
+    echo "[$timestamp] Detected suspicious pattern: '$pattern' in $log_file" >> "$SUSPICIOUS_LOG"
+    echo "Match: $match" >> "$SUSPICIOUS_LOG"
+    echo "IP Address: $ip_address" >> "$SUSPICIOUS_LOG"
+    echo "------------------------------------" >> "$SUSPICIOUS_LOG"
+}
+
+# Function to send email notification
+send_email_notification() {
+    local subject="Suspicious Activity Detected"
+    local body="Suspicious activity has been detected in your web server logs. Please check the suspicious activity log for more details."
+    local to_email="$1"
+    
+    echo "$body" | mail -s "$subject" "$to_email"
+}
+
+# Function to block IP address
+block_ip_address() {
+    local ip_address="$1"
+    echo "Blocking IP address: $ip_address via UFW"
+    sudo ufw deny from "$ip_address"
+    # Log IP blocking
+    echo "[$(date "+$DATE_FORMAT")] Blocked IP address: $ip_address via UFW" >> "$SUSPICIOUS_LOG"
+}
+
+# Function to detect Linux Distro and Kernel version
+log_system_info() {
+    local timestamp=$(date "+$DATE_FORMAT")
+
+    # Get the Linux distribution information
+    if command -v lsb_release &> /dev/null; then
+        DISTRO=$(lsb_release -d | awk -F"\t" '{print $2}')
+    elif [ -f /etc/os-release ]; then
+        DISTRO=$(grep "^PRETTY_NAME=" /etc/os-release | cut -d= -f2 | tr -d '"')
+    else
+        DISTRO="Unknown Linux Distribution"
+    fi
+
+    # Get the kernel version
+    KERNEL_VERSION=$(uname -r)
+
+    # Log system info
+    echo "[$timestamp] Linux Distribution: $DISTRO" >> "$SYSTEM_INFO_LOG"
+    echo "[$timestamp] Kernel Version: $KERNEL_VERSION" >> "$SYSTEM_INFO_LOG"
+    echo "------------------------------------" >> "$SYSTEM_INFO_LOG"
+}
+
+# Function to install the necessary email utility based on distro
+install_email_utility() {
+    local distro=$1
+
+    echo "Detected Linux Distribution: $distro"
+
+    if [[ "$distro" == *"Ubuntu"* || "$distro" == *"Debian"* ]]; then
+        # For Ubuntu/Debian, use mailutils
+        echo "Do you want to install 'mailutils' for email notifications? (yes/no)"
+        read install_mailutils
+        if [[ "$install_mailutils" == "yes" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y mailutils
+        fi
+    elif [[ "$distro" == *"CentOS"* || "$distro" == *"RHEL"* || "$distro" == *"Fedora"* ]]; then
+        # For CentOS/RHEL/Fedora, use mailx
+        echo "Do you want to install 'mailx' for email notifications? (yes/no)"
+        read install_mailx
+        if [[ "$install_mailx" == "yes" ]]; then
+            sudo yum install -y mailx
+        fi
+    else
+        echo "Unknown distribution. Cannot automatically determine mail utility installation."
+    fi
+}
+
+# Function to install fail2ban
+install_fail2ban() {
+    local distro=$1
+
+    echo "Do you want to install 'fail2ban' for IP blocking? (yes/no)"
+    read install_fail2ban
+    if [[ "$install_fail2ban" == "yes" ]]; then
+        if [[ "$distro" == *"Ubuntu"* || "$distro" == *"Debian"* ]]; then
+            sudo apt-get update
+            sudo apt-get install -y fail2ban
+        elif [[ "$distro" == *"CentOS"* || "$distro" == *"RHEL"* || "$distro" == *"Fedora"* ]]; then
+            sudo yum install -y fail2ban
+        fi
+    fi
+}
+
+# Function to configure fail2ban for Apache and Nginx
+configure_fail2ban() {
+    # Check if fail2ban is installed
+    if command -v fail2ban-client &> /dev/null; then
+        echo "Do you want to enable fail2ban for IP blocking? (yes/no)"
+        read enable_fail2ban
+        if [[ "$enable_fail2ban" == "yes" ]]; then
+            # Configure fail2ban for Apache
+            echo "Configuring fail2ban for Apache..."
+            sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
+            sudo bash -c 'echo "[apache]  
+            enabled = true
+            port = http,https
+            filter = apache-auth
+            logpath = /var/log/apache2/*error.log
+            maxretry = 3" >> /etc/fail2ban/jail.local'
+
+            # Configure fail2ban for Nginx
+            echo "Configuring fail2ban for Nginx..."
+            sudo bash -c 'echo "[nginx]  
+            enabled = true
+            port = http,https
+            filter = nginx-auth
+            logpath = /var/log/nginx/*error.log
+            maxretry = 3" >> /etc/fail2ban/jail.local'
+
+            # Restart fail2ban service to apply changes
+            sudo systemctl restart fail2ban
+            echo "fail2ban configured and restarted."
+        fi
+    else
+        echo "fail2ban is not installed. Will enable IP blocking through UFW."
+    fi
+}
+
+# Function to check if ufw is installed
+check_and_install_ufw() {
+    if ! command -v ufw &> /dev/null; then
+        echo "UFW is not installed. Would you like to install UFW? (yes/no)"
+        read install_ufw
+        if [[ "$install_ufw" == "yes" ]]; then
+            if [[ "$DISTRO" == *"Ubuntu"* || "$DISTRO" == *"Debian"* ]]; then
+                sudo apt-get update
+                sudo apt-get install -y ufw
+            elif [[ "$DISTRO" == *"CentOS"* || "$DISTRO" == *"RHEL"* || "$DISTRO" == *"Fedora"* ]]; then
+                sudo yum install -y ufw
+            fi
+        else
+            echo "Skipping UFW installation."
+        fi
+    else
+        echo "UFW is already installed."
+    fi
+}
+
+# Prompt user for email notification setup
+echo "Would you like to enable email notifications for suspicious activity? (yes/no)"
+read ENABLE_EMAIL
+if [ "$ENABLE_EMAIL" == "yes" ]; then
+    echo "Please enter the email address to receive notifications:"
+    read EMAIL_ADDRESS
+fi
+
+# Prompt user for automated IP blocking
+echo "Would you like to enable automated IP blocking for suspicious activity? (yes/no)"
+read ENABLE_BLOCKING
+
+# Log system info (Distro & Kernel)
+log_system_info
+
+# Detect and install the necessary mail utility
+install_email_utility "$DISTRO"
+
+# Detect and install fail2ban if necessary
+install_fail2ban "$DISTRO"
+
+# Configure fail2ban if installed
+configure_fail2ban
+
+# Check if ufw is installed and prompt to install if not
+check_and_install_ufw
+
+# If fail2ban is not installed, enable IP blocking via UFW
+if ! command -v fail2ban-client &> /dev/null; then
+    echo "fail2ban is not installed. Enabling IP blocking through UFW..."
+    sudo ufw enable
+    sudo ufw default deny incoming
+    sudo ufw default allow outgoing
+    echo "IP blocking through UFW has been enabled."
+fi
+
+# Check Apache Logs for suspicious activity
+echo "Starting Apache logs scan..."
+if [ -f "$APACHE_ACCESS_LOG" ]; then
+    detect_waf_attacks "$APACHE_ACCESS_LOG"
+else
+    echo "Apache access log not found: $APACHE_ACCESS_LOG"
+fi
+
+if [ -f "$APACHE_ERROR_LOG" ]; then
+    detect_waf_attacks "$APACHE_ERROR_LOG"
+else
+    echo "Apache error log not found: $APACHE_ERROR_LOG"
+fi
+
+# Check Nginx Logs for suspicious activity
+echo "Starting Nginx logs scan..."
+if [ -f "$NGINX_ACCESS_LOG" ]; then
+    detect_waf_attacks "$NGINX_ACCESS_LOG"
+else
+    echo "Nginx access log not found: $NGINX_ACCESS_LOG"
+fi
+
+if [ -f "$NGINX_ERROR_LOG" ]; then
+    detect_waf_attacks "$NGINX_ERROR_LOG"
+else
+    echo "Nginx error log not found: $NGINX_ERROR_LOG"
+fi
+
+# Check if suspicious activity was detected
+if [ -s "$SUSPICIOUS_LOG" ]; then
+    echo "Suspicious activity detected! Please review $SUSPICIOUS_LOG for details."
+    
+    # Send email notification if enabled
+    if [ "$ENABLE_EMAIL" == "yes" ]; then
+        send_email_notification "$EMAIL_ADDRESS"
+    fi
+else
+    echo "No suspicious activity found in the logs."
+fi
+
+exit 0
