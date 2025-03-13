@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Copyrighted to Jones Joseph
-#
+# Copyrighted to Jones Joseph 
+# Jones Joseph (BSCR-OSHWEBDB-01)
 # List of operations performed by this script:
 # 1. Updates the system packages to the latest versions.
 # 2. Installs recommended security packages such as fail2ban, ufw, auditd, lynis, chkrootkit, apparmor, etc.
