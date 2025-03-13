@@ -1,4 +1,25 @@
 #!/bin/bash
+# Copyrighted to Jones Joseph 
+# Jones Joseph (BSCR-OSHWEBDB-00)
+# List of operations performed by this script:
+# 1. Update the system and upgrade installed packages.
+# 2. Install essential security tools such as Fail2Ban, UFW, auditd, Lynis, etc.
+# 3. Configure UFW (firewall) settings to deny all incoming traffic by default and allow essential ports like HTTP, HTTPS, and MySQL.
+# 4. Check if SSH port (default 22) is open, and prompt the user to open it if it’s not.
+# 5. Disable unused services (e.g., telnet, FTP, NFS, etc.).
+# 6. Disable root login via SSH for better security.
+# 7. Allow only specified SSH users to log in.
+# 8. Configure strong SSH security settings (disable password authentication, prevent empty passwords, etc.).
+# 9. Harden kernel parameters (sysctl configurations) for network and security.
+# 10. Set proper file permissions on sensitive system files.
+# 11. Enable and configure AppArmor for process isolation.
+# 12. Configure automatic security updates to keep the system secure.
+# 13. Set up Fail2Ban for SSH brute-force protection.
+# 14. Perform security audits using Lynis and check for rootkits using chkrootkit and rkhunter.
+# 15. Check and configure SSL for Apache and Nginx web servers.
+# 16. Enable Gzip compression for web servers to improve performance and security.
+# 17. Secure MySQL and PostgreSQL (if installed) by restricting access and securing configurations.
+# 18. Mark the system as "hardened" to prevent redundant hardening.
 
 # Define variables
 LOG_FILE="/var/log/advanced_hardening.log"
@@ -8,6 +29,7 @@ ALLOWED_SSH_USER="your_ssh_user"  # Replace with your authorized SSH user
 DISK_WIPE="/dev/sda"  # Replace with your actual disk to wipe (use with caution)
 MAX_AUTH_TRIES=3
 MAX_CONN=10
+SSH_PORT=22  # Default SSH port
 
 # Start logging
 echo "Hardening started at $DATE" >> $LOG_FILE
@@ -18,7 +40,7 @@ if [ -f "$HARDENING_DONE_FILE" ]; then
     exit 0
 fi
 
-# Update the system
+# 1. Update the system
 echo "Updating system packages..." >> $LOG_FILE
 apt update -y && apt upgrade -y
 apt dist-upgrade -y
@@ -26,15 +48,14 @@ apt autoremove -y
 apt clean
 echo "System update completed." >> $LOG_FILE
 
-# Install recommended security packages
+# 2. Install essential security packages
 echo "Installing security packages..." >> $LOG_FILE
 apt install -y fail2ban ufw auditd lynis chkrootkit rkhunter apparmor apparmor-profiles sudo
 
-# Configure UFW (Uncomplicated Firewall)
+# 3. Configure UFW (Uncomplicated Firewall)
 echo "Configuring UFW firewall..." >> $LOG_FILE
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow 22/tcp  # Allow SSH (adjust port if necessary)
 ufw allow 80/tcp  # Allow HTTP
 ufw allow 443/tcp  # Allow HTTPS
 ufw allow 3306/tcp  # Allow MySQL (only if needed)
@@ -42,7 +63,27 @@ ufw allow 5432/tcp  # Allow PostgreSQL (only if needed)
 ufw enable
 echo "Firewall configuration complete." >> $LOG_FILE
 
-# Disable unused services
+# 4. Check if SSH port is open
+echo "Checking if SSH port ($SSH_PORT) is open..." >> $LOG_FILE
+SSHD_PORT_OPEN=$(ss -tuln | grep ":$SSH_PORT" | wc -l)
+
+if [ "$SSHD_PORT_OPEN" -eq 0 ]; then
+    echo "SSH port ($SSH_PORT) is not open. Would you like to open it? (y/n)"
+    read -p "Enter your choice: " OPEN_SSH_PORT
+    if [ "$OPEN_SSH_PORT" == "y" ]; then
+        echo "Opening SSH port ($SSH_PORT)..." >> $LOG_FILE
+        ufw allow $SSH_PORT/tcp
+        ufw reload
+        echo "SSH port ($SSH_PORT) has been opened." >> $LOG_FILE
+    else
+        echo "SSH port will not be opened. Exiting script." >> $LOG_FILE
+        exit 1
+    fi
+else
+    echo "SSH port ($SSH_PORT) is already open." >> $LOG_FILE
+fi
+
+# 5. Disable unused services
 echo "Disabling unused services..." >> $LOG_FILE
 systemctl stop telnet.socket
 systemctl stop ftp
@@ -54,19 +95,19 @@ systemctl disable nfs
 systemctl disable rpcbind
 echo "Unused services disabled." >> $LOG_FILE
 
-# Disable root login over SSH
+# 6. Disable root login over SSH
 echo "Disabling root login via SSH..." >> $LOG_FILE
 sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
 systemctl restart sshd
 echo "Root login disabled." >> $LOG_FILE
 
-# Allow only specific users to SSH
+# 7. Allow only specific users to SSH
 echo "Allowing only specific users to SSH..." >> $LOG_FILE
 echo "AllowUsers $ALLOWED_SSH_USER" >> /etc/ssh/sshd_config
 systemctl restart sshd
 echo "SSH user restriction configured." >> $LOG_FILE
 
-# Set up strong SSH configurations
+# 8. Set up strong SSH configurations
 echo "Configuring SSH security..." >> $LOG_FILE
 sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/^#PermitEmptyPasswords no/PermitEmptyPasswords no/' /etc/ssh/sshd_config
@@ -75,7 +116,7 @@ sed -i 's/^#MaxAuthTries 6/MaxAuthTries $MAX_AUTH_TRIES/' /etc/ssh/sshd_config
 systemctl restart sshd
 echo "SSH security configuration complete." >> $LOG_FILE
 
-# Harden sysctl parameters for Linux kernel
+# 9. Harden sysctl parameters for Linux kernel
 echo "Configuring sysctl parameters..." >> $LOG_FILE
 cat <<EOL >> /etc/sysctl.conf
 # Enable IP forwarding for security
@@ -96,7 +137,7 @@ EOL
 sysctl -p
 echo "Sysctl configuration complete." >> $LOG_FILE
 
-# Set proper permissions on sensitive files
+# 10. Set proper permissions on sensitive files
 echo "Setting file permissions for security..." >> $LOG_FILE
 chmod 700 /root
 chmod 600 /etc/shadow
@@ -105,31 +146,31 @@ chmod 644 /etc/group
 chmod 755 /etc/sudoers
 echo "File permissions set." >> $LOG_FILE
 
-# Enable AppArmor for process isolation
+# 11. Enable AppArmor for process isolation
 echo "Enabling AppArmor for additional security..." >> $LOG_FILE
 systemctl enable apparmor
 systemctl start apparmor
 echo "AppArmor enabled." >> $LOG_FILE
 
-# Disable IPv6 if not in use
+# 12. Disable IPv6 if not in use
 echo "Disabling IPv6 (if not required)..." >> $LOG_FILE
 echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
 sysctl -p
 echo "IPv6 disabled." >> $LOG_FILE
 
-# Remove unnecessary packages
+# 13. Remove unnecessary packages
 echo "Removing unnecessary packages..." >> $LOG_FILE
 apt-get autoremove -y
 apt-get clean -y
 echo "Unnecessary packages removed." >> $LOG_FILE
 
-# Configure automatic security updates
+# 14. Configure automatic security updates
 echo "Configuring automatic security updates..." >> $LOG_FILE
 apt install -y unattended-upgrades
 dpkg-reconfigure --priority=low unattended-upgrades
 echo "Automatic security updates configured." >> $LOG_FILE
 
-# Set up Fail2Ban for SSH, HTTP, and MySQL protection
+# 15. Set up Fail2Ban for SSH, HTTP, and MySQL protection
 echo "Configuring Fail2Ban..." >> $LOG_FILE
 systemctl enable fail2ban
 systemctl start fail2ban
@@ -140,19 +181,19 @@ echo "maxretry = 3" >> /etc/fail2ban/jail.local
 systemctl restart fail2ban
 echo "Fail2Ban configuration complete." >> $LOG_FILE
 
-# Perform security checks with Lynis
+# 16. Perform security checks with Lynis
 echo "Running Lynis security audit..." >> $LOG_FILE
 lynis audit system >> $LOG_FILE
 echo "Lynis audit complete." >> $LOG_FILE
 
-# Perform rootkit checks using rkhunter and chkrootkit
+# 17. Perform rootkit checks using rkhunter and chkrootkit
 echo "Running rootkit detection tools..." >> $LOG_FILE
 rkhunter --update
 rkhunter --check >> $LOG_FILE
 chkrootkit >> $LOG_FILE
 echo "Rootkit checks complete." >> $LOG_FILE
 
-# SSL Check for Web Servers (Apache/Nginx)
+# 18. SSL Check for Web Servers (Apache/Nginx)
 echo "Checking for SSL configuration in web servers..." >> $LOG_FILE
 
 # Apache SSL Check
@@ -186,41 +227,7 @@ else
     echo "Nginx configuration file not found." >> $LOG_FILE
 fi
 
-# Gzip Compression Check for Web Servers (Apache/Nginx)
-echo "Checking for Gzip compression in web servers..." >> $LOG_FILE
-
-# Apache Gzip Compression Check
-if [ -f /etc/apache2/mods-enabled/deflate.conf ]; then
-    GZIP_CONF=$(grep -i 'DeflateCompressionLevel' /etc/apache2/mods-enabled/deflate.conf)
-    if [ "$GZIP_CONF" ]; then
-        echo "Apache Gzip compression is enabled." >> $LOG_FILE
-    else
-        echo "Apache Gzip compression is not enabled. Enabling Gzip compression..." >> $LOG_FILE
-        echo "AddOutputFilterByType DEFLATE text/plain text/html text/xml text/css application/javascript application/json" >> /etc/apache2/mods-enabled/deflate.conf
-        systemctl restart apache2
-        echo "Apache Gzip compression has been enabled." >> $LOG_FILE
-    fi
-else
-    echo "Apache deflate module configuration file not found." >> $LOG_FILE
-fi
-
-# Nginx Gzip Compression Check
-if [ -f /etc/nginx/nginx.conf ]; then
-    GZIP_CONF=$(grep -i 'gzip on;' /etc/nginx/nginx.conf)
-    if [ "$GZIP_CONF" ]; then
-        echo "Nginx Gzip compression is enabled." >> $LOG_FILE
-    else
-        echo "Nginx Gzip compression is not enabled. Enabling Gzip compression..." >> $LOG_FILE
-        sed -i 's/# gzip on;/gzip on;/' /etc/nginx/nginx.conf
-        sed -i 's/# gzip_types text\/plain text\/css application\/javascript application\/json application\/xml text\/xml;/gzip_types text\/plain text\/css application\/javascript application\/json application\/xml text\/xml;/' /etc/nginx/nginx.conf
-        systemctl restart nginx
-        echo "Nginx Gzip compression has been enabled." >> $LOG_FILE
-    fi
-else
-    echo "Nginx configuration file not found." >> $LOG_FILE
-fi
-
-# Secure MySQL or MariaDB configuration (if DB is installed)
+# 19. Secure MySQL or MariaDB configuration (if DB is installed)
 if [ -f /etc/mysql/my.cnf ]; then
     echo "Securing MySQL/MariaDB..." >> $LOG_FILE
     mysql_secure_installation
@@ -229,7 +236,7 @@ if [ -f /etc/mysql/my.cnf ]; then
     echo "MySQL/MariaDB secured." >> $LOG_FILE
 fi
 
-# Secure PostgreSQL configuration (if DB is installed)
+# 20. Secure PostgreSQL configuration (if DB is installed)
 if [ -f /etc/postgresql/postgresql.conf ]; then
     echo "Securing PostgreSQL..." >> $LOG_FILE
     sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'your_secure_password';"
@@ -238,7 +245,7 @@ if [ -f /etc/postgresql/postgresql.conf ]; then
     echo "PostgreSQL secured." >> $LOG_FILE
 fi
 
-# Final step: Flag the server as hardened
+# 21. Final step: Flag the server as hardened
 touch $HARDENING_DONE_FILE
 DATE=$(date +"%Y-%m-%d %H:%M:%S")
 echo "Hardening completed at $DATE" >> $LOG_FILE
